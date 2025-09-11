@@ -860,8 +860,13 @@ class LoadImagesAndLabels(Dataset):
             if fn.exists():  # load npy
                 im = np.load(fn)
             else:  # read image
-                im = cv2.imread(f)  # BGR
-                assert im is not None, f"Image Not Found {f}"
+                # 修改点 1：强制读取为灰度图
+                im = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+                assert im is not None, f'Image Not Found {f}'
+
+                # 修改点 2：复制灰度通道为3通道，变成伪RGB
+                im = np.stack([im, im, im], axis=-1)  # shape: (H, W) -> (H, W, 3)
+
             h0, w0 = im.shape[:2]  # orig hw
             r = self.img_size / max(h0, w0)  # ratio
             if r != 1:  # if sizes are not equal
