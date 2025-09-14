@@ -1121,3 +1121,44 @@ class Classify(nn.Module):
         if isinstance(x, list):
             x = torch.cat(x, 1)
         return self.linear(self.drop(self.pool(self.conv(x)).flatten(1)))
+
+
+class IDA(nn.Module):
+    """Industrial Defect-aware Attention Module"""
+
+    def __init__(self, c1, reduction=16):
+        super(IDA, self).__init__()
+        self.c = c1
+
+        # ========== 空间注意力：多尺度空洞卷积 ==========
+        self.s_conv1 = nn.Conv2d(c1, c1 // 4, 1, 1, 0, dilation=1, groups=c1 // 4)
+        self.s_conv2 = nn.Conv2d(c1, c1 // 4, 3, 1, 2, dilation=2, groups=c1 // 4)
+        self.s_conv3 = nn.Conv2d(c1, c1 // 4, 5, 1, 6, dilation=3, groups=c1 // 4)
+        self.s_fuse = nn.Conv2d(c1 // 4 * 3, 1, 1)
+        self.s_pool = nn.AdaptiveAvgPool2d(1)    # ✅ 改用平均池化，保留低激活区域
+
+        # ========== 通道注意力 ==========
+        self.c_pool = nn.AdaptiveAvgPool2d(1)
+        self.c_fc1 = nn.Conv2d(c1, c1 // reduction, 1, bias=False)
+        self.c_fc2 = nn.Conv2d(c1 // reduction, c1, 1, bias=False)
+
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+
+        # --- 空间注意力 ---
+        s1 = self.s_conv1(x)
+        s2 = self.s_conv2(x)
+        s3 = self.s_conv3(x)
+        s_cat = torch.cat([s1, s2, s3], dim=1)
+        s_fuse = self.s_fuse(s_cat)  # [B,1,H,W]
+        s_weight = self.sigmoid(self.s_pool(s_fuse))  # [B,1,1,1]
+        spatial_mask = s_weight.expand_as(x)  # [B,C,H,W]
+
+        # --- 通道注意力 ---
+        c_weight = self.sigmoid(self.c_fc2(F.relu(self.c_fc1(self.c_pool(x)))))  # [B,C,1,1]
+
+        # --- 融合 + 残差 ---
+        mask = spatial_mask * c_weight
+        return x * mask + x
